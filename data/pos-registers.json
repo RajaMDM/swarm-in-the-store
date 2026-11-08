@@ -1,0 +1,31 @@
+{
+  "_about": "POS register asset list (physical reality): which lanes have a working register installed. A lane can only serve customers if it is on this list.",
+  "version": "2026.10-refit",
+  "owner": "IT Asset Management (fictitious)",
+  "registers": [
+    {
+      "lane": "L1",
+      "assetTag": "POS-014-01"
+    },
+    {
+      "lane": "L2",
+      "assetTag": "POS-014-02"
+    },
+    {
+      "lane": "L3",
+      "assetTag": "POS-014-03"
+    },
+    {
+      "lane": "L4",
+      "assetTag": "POS-014-04"
+    },
+    {
+      "lane": "L5",
+      "assetTag": "POS-014-05"
+    },
+    {
+      "lane": "L6",
+      "assetTag": "POS-014-06"
+    }
+  ]
+}

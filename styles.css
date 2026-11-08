@@ -82,10 +82,8 @@ select, input[type='number'] {
 }
 input[type='range'] { width: 100%; accent-color: var(--navy); }
 .inline { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; }
-fieldset.dq { border: none; padding: 0; flex-direction: row; gap: 18px; }
-fieldset.dq legend { padding: 0; margin-bottom: 6px; font-weight: 600; width: 100%; }
-.dq-explainer { background: var(--bad-bg); border-radius: 10px; padding: 12px 14px; font-size: 13px; margin: -4px 0 16px; }
-.dq-explainer ul { margin: 6px 0 0; padding-left: 18px; }
+fieldset.defects-field { border: none; padding: 0; margin-inline: 0; min-width: 0; }
+fieldset.defects-field legend { padding: 0; }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .hint { display: block; margin: 8px 0 12px; font-size: 13px; }
 
@@ -99,7 +97,7 @@ fieldset.dq legend { padding: 0; margin-bottom: 6px; font-weight: 600; width: 10
 .metric.alert { background: var(--bad-bg); border-color: #f1c9c5; }
 
 .lower { max-width: 1240px; margin: 20px auto 0; padding: 0 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-#checks-summary { font-weight: 600; margin: 0 0 6px; }
+.checks-summary { font-weight: 600; margin: 0 0 6px; }
 #checks-summary.ok { color: var(--teal); }
 #checks-summary.bad { color: var(--coral); }
 .checks { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; font-size: 14px; }
@@ -142,3 +140,27 @@ td.worst { background: var(--bad-bg); font-weight: 600; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .legends { grid-template-columns: 1fr; }
 }
+
+/* v1.1: defects, governance tiers, interaction note */
+.defects-field { gap: 8px; }
+.defects-field legend { font-weight: 600; margin-bottom: 4px; }
+.defects-field .how { font-weight: 400; line-height: 1.45; }
+.defect { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font-weight: 400; cursor: pointer; }
+.defect:has(input:checked) { border-color: #f1c9c5; background: var(--bad-bg); }
+.defect input { margin-top: 4px; accent-color: var(--coral); }
+.defect small { line-height: 1.45; }
+.domain { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.tier + .tier { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.tier-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.tier-head h3 { font: 600 15px var(--sans); margin: 0; }
+.tier-badge { font: 500 12px var(--mono); padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+.tier-badge.ok { background: var(--good-bg); color: var(--teal); }
+.tier-badge.bad { background: var(--bad-bg); color: var(--coral); }
+.tier-badge.warn { background: #f9eeda; color: #9a5b00; }
+.checks .warn .mark { background: #f9eeda; color: #9a5b00; font-weight: 700; }
+.verdict { margin: 16px 0 0; padding: 12px 14px; border-radius: 10px; background: #f9eeda; font-size: 14px; font-weight: 600; }
+.interaction { background: var(--wash); border-radius: 10px; padding: 12px 16px; margin-bottom: 14px; font-size: 14px; }
+.interaction p { margin: 0 0 6px; }
+.interaction ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.range { font-weight: 400; }
+code { font: 13px var(--mono); background: var(--wash); padding: 1px 5px; border-radius: 4px; }

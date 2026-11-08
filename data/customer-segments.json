@@ -1,6 +1,6 @@
 {
-  "_about": "Customer segments: shopper missions and their behaviour parameters. Shares must sum to 1.",
-  "version": "1.0.0",
+  "_about": "Customer segments: shopper missions and behaviour. patience = the longest queue (in people) a shopper will join before abandoning the basket and walking out. orderValue applies to click-and-collect pickups.",
+  "version": "1.1.0",
   "owner": "Customer Insight (fictitious)",
   "segments": [
     {
@@ -17,7 +17,8 @@
         6
       ],
       "impulse": 0.15,
-      "color": "#10847A"
+      "color": "#10847A",
+      "patience": 4
     },
     {
       "id": "browse",
@@ -33,7 +34,8 @@
         12
       ],
       "impulse": 0.5,
-      "color": "#524AA8"
+      "color": "#524AA8",
+      "patience": 6
     },
     {
       "id": "family",
@@ -49,7 +51,8 @@
         15
       ],
       "impulse": 0.6,
-      "color": "#E4962A"
+      "color": "#E4962A",
+      "patience": 7
     },
     {
       "id": "collect",
@@ -65,7 +68,9 @@
         0
       ],
       "impulse": 0.1,
-      "color": "#DA5448"
+      "color": "#DA5448",
+      "patience": 8,
+      "orderValue": 60
     }
   ]
 }

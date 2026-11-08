@@ -21,12 +21,13 @@ const COLORS = {
 export class StoreRenderer {
   /**
    * @param {HTMLCanvasElement} canvas
-   * @param {{categories:{code:string,color:string,name:string}[]}} products
+   * @param {{categories:{id:string,color:string}[]}} products Colours per category.
    */
   constructor(canvas, products) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.colorByCode = new Map(products.categories.map((c) => [c.code, c.color]));
+    this.colorByCategory = new Map(products.categories.map((c) => [c.id, c.color]));
+    this.colorByCode = new Map();
     this.sim = null;
     this.cs = 12;
     this.staticLayer = null;
@@ -35,6 +36,9 @@ export class StoreRenderer {
   /** Bind a simulation and size the canvas to its container. */
   setSimulation(sim) {
     this.sim = sim;
+    // Shelves are coloured by what is physically on them (the planogram),
+    // not by what the product master claims.
+    this.colorByCode = new Map(sim.planogram.fixtures.map((f) => [f.code, this.colorByCategory.get(f.category)]));
     this.resize();
   }
 
@@ -54,7 +58,7 @@ export class StoreRenderer {
   }
 
   buildStaticLayer(dpr) {
-    const { W, H, type, shelf } = this.sim.grid;
+    const { W, H, type, fixture } = this.sim.grid;
     const cs = this.cs;
     const layer = document.createElement('canvas');
     layer.width = Math.round(W * cs * dpr);
@@ -72,7 +76,7 @@ export class StoreRenderer {
           g.fillStyle = COLORS.wall;
           g.fillRect(x * cs, y * cs, cs, cs);
         } else if (t === CELL.SHELF) {
-          g.fillStyle = this.colorByCode.get(shelf[i]) ?? COLORS.slate;
+          g.fillStyle = this.colorByCode.get(fixture[i]) ?? COLORS.slate;
           g.globalAlpha = 0.28 + (((x * 7 + y * 13) % 5) / 5) * 0.4; // SKU-level texture
           g.fillRect(x * cs + 1, y * cs + 1, cs - 2, cs - 2);
           g.globalAlpha = 1;
@@ -89,11 +93,10 @@ export class StoreRenderer {
       }
     }
 
-    // Any counter that is not actually staffed — including a phantom lane the
-    // dirty master data claims is open — is drawn closed.
+    // Any counter that is not actually staffed — including a lane the
+    // location master wrongly says is open — is drawn closed.
     const listed = new Set(this.sim.lanes.map((l) => l.counter?.join(',')));
-    const phantomDefs = this.sim.layout.phantomCheckouts ?? [];
-    for (const def of [...this.sim.layout.checkouts, ...phantomDefs]) {
+    for (const def of this.sim.layout.checkouts) {
       if (listed.has(def.counter.join(','))) continue;
       const [x, y] = def.counter;
       g.fillStyle = COLORS.closed;
@@ -107,7 +110,7 @@ export class StoreRenderer {
       const [x, y] = l.counter;
       g.fillText(l.id, (x + 0.5) * cs, (y + 2.1) * cs);
     }
-    for (const l of this.sim.phantomLanes) {
+    for (const l of this.sim.deadLanes) {
       const [x, y] = l.counter;
       g.fillStyle = COLORS.promo;
       g.fillText(`${l.id}?`, (x + 0.5) * cs, (y + 2.1) * cs);

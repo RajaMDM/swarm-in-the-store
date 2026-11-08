@@ -2,16 +2,26 @@
  * Swarm in the Store — simulation engine.
  *
  * DOM-free so the same code runs in the browser demo and in Node tests.
- * Every random draw comes from one seeded generator, so a given seed,
- * parameter set and master data always produce identical results.
+ * Every random draw comes from seeded generators, so a given seed,
+ * parameter set and data always produce identical results.
  *
- * Model in one paragraph: the store is a grid read from the location master.
- * Shoppers arrive at the entrance, each with a mission from the customer
- * segment master. They walk to the shelves on their list (located via the
- * product master), dwell, may be pulled in by a promo stand, then queue at a
- * checkout and leave. No agent sees the whole store: each step only compares
- * neighbouring cells and how crowded they are. Congestion, queues and
- * hotspots emerge from those local decisions.
+ * Two kinds of data, deliberately kept apart:
+ *   System of record (what the store's systems believe)
+ *     - location master: geometry, lane status (drives the queue-call board)
+ *     - product master: which aisle each category is on (drives signage/app)
+ *     - customer segments: shopper missions and behaviour
+ *   Physical reality (what is actually on the floor)
+ *     - planogram: which category is really stocked on each fixture
+ *     - POS registers: which lanes can really serve customers
+ *
+ * Shoppers act on the system of record (signage, queue board) and collide
+ * with physical reality. The engine has no notion of "clean" or "dirty"
+ * data: a defect is simply a system-of-record file that disagrees with
+ * reality, and its cost emerges from shoppers acting on it.
+ *
+ * Navigation: shoppers follow floor-level wayfinding (a distance map built
+ * from the location master) towards the aisle the signage names, while
+ * reacting only to crowding in their four neighbouring cells.
  */
 
 /** Seconds of store time represented by one simulation tick. */
@@ -26,8 +36,8 @@ export const CROWD_CAP = 3;
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const UNREACHABLE = 1e9;
 const LANE_JOIN_DISTANCE = 3;
-/** Seconds a shopper stands at a closed lane before giving up on it. */
-const PHANTOM_WAIT = [45, 90];
+/** Seconds a shopper stands at a lane with no register before giving up on it. */
+const DEAD_LANE_WAIT = [45, 90];
 const SEARCH_RECOVERY_PROBABILITY = 0.55;
 const SIDESTEP_AFTER = 3;
 const SQUEEZE_AFTER = 8;
@@ -50,7 +60,7 @@ export function mulberry32(seed) {
 /**
  * Parse an ASCII grid from the location master.
  * @param {string[]} rows Equal-length strings.
- * @returns {{W:number,H:number,type:Uint8Array,shelf:Array<string|null>}}
+ * @returns {{W:number,H:number,type:Uint8Array,fixture:Array<string|null>}}
  * @throws {Error} On ragged rows or unknown symbols.
  */
 export function parseGrid(rows) {
@@ -63,7 +73,7 @@ export function parseGrid(rows) {
     }
   });
   const type = new Uint8Array(W * H);
-  const shelf = new Array(W * H).fill(null);
+  const fixture = new Array(W * H).fill(null);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const ch = rows[y][x];
@@ -72,11 +82,11 @@ export function parseGrid(rows) {
       else if (ch === '#') type[i] = CELL.WALL;
       else if (ch === 'E') type[i] = CELL.ENTRANCE;
       else if (ch === 'C' || ch === 'K') type[i] = CELL.COUNTER;
-      else if (/[0-9]/.test(ch)) { type[i] = CELL.SHELF; shelf[i] = ch; }
+      else if (/[0-9]/.test(ch)) { type[i] = CELL.SHELF; fixture[i] = ch; }
       else throw new Error(`Unknown layout symbol '${ch}' at (${x},${y}).`);
     }
   }
-  return { W, H, type, shelf };
+  return { W, H, type, fixture };
 }
 
 const isWalkable = (t) => t === CELL.FLOOR || t === CELL.ENTRANCE;
@@ -133,90 +143,122 @@ function cellsBeside(grid, pred) {
 }
 
 /**
- * Data-quality checks on the three masters — the governance gate the demo
- * shows before it will run.
- * @param {{layout:object, products:object, segments:object}} data
- * @returns {{check:string, ok:boolean, detail:string}[]}
+ * Two-tier master data checks.
+ *
+ * Tier 1, structural integrity: is the data well-formed and internally
+ * consistent? Failure blocks the simulation.
+ * Tier 2, operational sync: does the system of record agree with physical
+ * reality? Failure is a warning; the store still opens, and pays for it.
+ *
+ * @param {{layout:object, products:object, segments:object, planogram:object, registers:object}} data
+ * @returns {{structural:{check:string,ok:boolean,detail:string}[], operational:{check:string,ok:boolean,detail:string}[]}}
  */
-export function validateMasterData({ layout, products, segments }) {
-  const results = [];
-  const add = (check, ok, detail) => results.push({ check, ok, detail });
+export function validateMasterData({ layout, products, segments, planogram, registers }) {
+  const structural = [];
+  const operational = [];
+  const add = (list, check, ok, detail) => list.push({ check, ok, detail });
   let grid;
   try {
     grid = parseGrid(layout.grid);
-    add('Grid is rectangular with known symbols', true, `${grid.W} × ${grid.H} cells`);
+    add(structural, 'Grid is rectangular with known symbols', true, `${grid.W} × ${grid.H} cells`);
   } catch (err) {
-    add('Grid is rectangular with known symbols', false, err.message);
-    return results;
+    add(structural, 'Grid is rectangular with known symbols', false, err.message);
+    return { structural, operational };
   }
-  const { W, type, shelf } = grid;
+  const { W, type, fixture } = grid;
   const idx = ([x, y]) => y * W + x;
-  const codes = new Set(shelf.filter(Boolean));
-  const cats = products.categories;
+  const gridCodes = new Set(fixture.filter(Boolean));
+  const planCodes = new Set(planogram.fixtures.map((f) => f.code));
+  const catIds = new Set(products.categories.map((c) => c.id));
 
-  const missing = cats.filter((c) => !codes.has(c.code)).map((c) => c.name);
-  add('Every product category has a shelf', missing.length === 0,
-    missing.length ? `No shelf for: ${missing.join(', ')}` : `${cats.length} categories placed`);
+  const unplanned = [...gridCodes].filter((c) => !planCodes.has(c));
+  add(structural, 'Every fixture group is in the planogram', unplanned.length === 0,
+    unplanned.length ? `Fixtures with no planogram entry: ${unplanned.join(', ')}` : `${gridCodes.size} fixture groups`);
 
-  const known = new Set(cats.map((c) => c.code));
-  const orphans = [...codes].filter((c) => !known.has(c));
-  add('Every shelf maps to a product category', orphans.length === 0,
-    orphans.length ? `Orphan shelf codes: ${orphans.join(', ')}` : 'No orphan shelves');
+  const unknownCats = planogram.fixtures.filter((f) => !catIds.has(f.category)).map((f) => f.category);
+  add(structural, 'Planogram categories exist in the product master', unknownCats.length === 0,
+    unknownCats.length ? `Unknown: ${unknownCats.join(', ')}` : 'All matched');
+
+  const stocked = new Set(planogram.fixtures.filter((f) => gridCodes.has(f.code)).map((f) => f.category));
+  const unstocked = products.categories.filter((c) => !stocked.has(c.id)).map((c) => c.name);
+  add(structural, 'Every product category is stocked somewhere', unstocked.length === 0,
+    unstocked.length ? `Not on any fixture: ${unstocked.join(', ')}` : `${products.categories.length} categories`);
+
+  const badAisles = products.categories.filter((c) => !gridCodes.has(c.aisle)).map((c) => `${c.name} → ${c.aisle}`);
+  add(structural, 'Product master aisles reference real fixtures', badAisles.length === 0,
+    badAisles.length ? `No such fixture: ${badAisles.join(', ')}` : 'All aisle codes exist');
 
   const entrances = [];
   type.forEach((t, i) => { if (t === CELL.ENTRANCE) entrances.push(i); });
-  add('Store has an entrance', entrances.length > 0, `${entrances.length} entrance cells`);
-  if (!entrances.length) return results;
+  add(structural, 'Store has an entrance', entrances.length > 0, `${entrances.length} entrance cells`);
+  if (!entrances.length) return { structural, operational };
   const fromDoor = distanceField(grid, entrances);
 
-  const lanes = [...layout.checkouts, layout.collect];
-  const badLanes = lanes.filter((l) => fromDoor[idx(l.service)] >= UNREACHABLE).map((l) => l.id);
-  add('Checkout and collect points are reachable', badLanes.length === 0,
-    badLanes.length ? `Unreachable: ${badLanes.join(', ')}` : `${lanes.length} service points`);
+  const points = [...layout.checkouts, layout.collect];
+  const badLanes = points.filter((l) => fromDoor[idx(l.service)] >= UNREACHABLE).map((l) => l.id);
+  add(structural, 'Checkout and collect points are reachable', badLanes.length === 0,
+    badLanes.length ? `Unreachable: ${badLanes.join(', ')}` : `${points.length} service points`);
 
-  const unreachableCats = cats.filter((c) => {
-    const beside = cellsBeside(grid, (i) => shelf[i] === c.code);
+  const unreachable = [...gridCodes].filter((code) => {
+    const beside = cellsBeside(grid, (i) => fixture[i] === code);
     return beside.length === 0 || beside.every((i) => fromDoor[i] >= UNREACHABLE);
-  }).map((c) => c.name);
-  add('Every category is reachable from the entrance', unreachableCats.length === 0,
-    unreachableCats.length ? `Unreachable: ${unreachableCats.join(', ')}` : 'All aisles reachable');
+  });
+  add(structural, 'Every fixture is reachable from the entrance', unreachable.length === 0,
+    unreachable.length ? `Unreachable fixtures: ${unreachable.join(', ')}` : 'All aisles reachable');
 
   const badPromo = Object.entries(layout.promoSlots)
     .filter(([, s]) => type[idx(s.cell)] !== CELL.FLOOR).map(([k]) => k);
-  add('Promo slots sit on open floor', badPromo.length === 0,
+  add(structural, 'Promo slots sit on open floor', badPromo.length === 0,
     badPromo.length ? `Blocked slots: ${badPromo.join(', ')}` : `${Object.keys(layout.promoSlots).length} slots`);
 
   const share = segments.segments.reduce((s, g) => s + g.share, 0);
-  add('Customer segment shares sum to 100%', Math.abs(share - 1) < 1e-6, `${Math.round(share * 100)}%`);
-  return results;
+  add(structural, 'Customer segment shares sum to 100%', Math.abs(share - 1) < 1e-6, `${Math.round(share * 100)}%`);
+
+  // Tier 2: system of record vs physical reality.
+  const mismatched = products.categories.filter((c) => {
+    const where = planogram.fixtures.filter((f) => f.category === c.id).map((f) => f.code);
+    return where.length > 0 && !where.includes(c.aisle);
+  }).map((c) => {
+    const where = planogram.fixtures.filter((f) => f.category === c.id).map((f) => f.code).join('/');
+    return `${c.name}: product master says aisle ${c.aisle}, planogram has it on ${where}`;
+  });
+  add(operational, 'Aisle signage matches the planogram', mismatched.length === 0,
+    mismatched.length ? mismatched.join('; ') : 'Product master and planogram agree');
+
+  const installed = new Set(registers.registers.map((r) => r.lane));
+  const openWithoutRegister = layout.checkouts.filter((l) => l.status === 'open' && !installed.has(l.id)).map((l) => l.id);
+  add(operational, 'No lane is open without a POS register', openWithoutRegister.length === 0,
+    openWithoutRegister.length ? `${openWithoutRegister.join(', ')} marked open in the location master, but no register is installed`
+      : 'Lane status and register list agree');
+
+  return { structural, operational };
 }
 
 /**
  * @typedef {object} SimParams
- * @property {number} openCheckouts Real lanes staffed (1..checkouts.length).
+ * @property {number} openCheckouts Shift plan: how many lanes with a register are staffed.
  * @property {number} arrivalsPerMin Mean shopper arrivals per minute.
  * @property {string} promoSlot 'none' or a key of layout.promoSlots.
- * @property {'clean'|'dirty'} dataQuality Dirty = stale category location + phantom lane.
  * @property {number} durationMin Simulated store minutes.
  */
 
 /**
  * Build a simulation.
- * @param {{data:{layout:object, products:object, segments:object}, params:SimParams, seed:number}} config
+ * @param {{data:{layout:object, products:object, segments:object, planogram:object, registers:object},
+ *          params:SimParams, seed:number}} config
  */
 export function createSimulation({ data, params, seed }) {
-  const { layout, products, segments } = data;
+  const { layout, products, segments, planogram, registers } = data;
   // Three independent streams ("common random numbers"): arrivals and shopper
-  // profiles stay identical across scenarios, so a clean-vs-dirty comparison
-  // faces the same customers and only the master data differs.
+  // profiles stay identical across scenarios, so comparing two versions of
+  // the data faces the same customers and only the data differs.
   const rngArrive = mulberry32(seed);
   const rngProfile = mulberry32(seed ^ 0x9e3779b9);
   const rng = mulberry32(seed ^ 0x85ebca6b);
   const randint = ([lo, hi], r = rng) => lo + Math.floor(r() * (hi - lo + 1));
-  const dirty = params.dataQuality === 'dirty';
 
   const grid = parseGrid(layout.grid);
-  const { W, H, type, shelf } = grid;
+  const { W, H, type, fixture } = grid;
   const idx = ([x, y]) => y * W + x;
 
   let promoCell = -1;
@@ -230,6 +272,14 @@ export function createSimulation({ data, params, seed }) {
   const entrances = [];
   type.forEach((t, i) => { if (t === CELL.ENTRANCE) entrances.push(i); });
 
+  // Physical reality: where each category actually is.
+  const fixturesFor = new Map();
+  for (const f of planogram.fixtures) {
+    if (!fixturesFor.has(f.category)) fixturesFor.set(f.category, new Set());
+    fixturesFor.get(f.category).add(f.code);
+  }
+  const categoryById = new Map(products.categories.map((c) => [c.id, c]));
+
   const fieldCache = new Map();
   /** Distance field for a named target, computed once and cached. */
   function field(key) {
@@ -238,9 +288,12 @@ export function createSimulation({ data, params, seed }) {
     let sources;
     if (key === 'exit') sources = entrances;
     else if (key === 'promo') sources = cellsBeside(grid, (i) => i === promoCell);
-    else if (key.startsWith('cat:')) {
+    else if (key.startsWith('fix:')) {
       const code = key.slice(4);
-      sources = cellsBeside(grid, (i) => shelf[i] === code);
+      sources = cellsBeside(grid, (i) => fixture[i] === code);
+    } else if (key.startsWith('cat:')) {
+      const codes = fixturesFor.get(key.slice(4)) ?? new Set();
+      sources = cellsBeside(grid, (i) => codes.has(fixture[i]));
     } else if (key.startsWith('svc:')) sources = [laneById.get(key.slice(4)).service];
     else throw new Error(`Unknown field key '${key}'.`);
     f = distanceField(grid, sources);
@@ -248,18 +301,27 @@ export function createSimulation({ data, params, seed }) {
     return f;
   }
 
-  const makeLane = (def, phantom) => ({
-    id: def.id, phantom, service: idx(def.service), counter: def.counter ?? null,
+  // Lanes. Registers are physical; status is what the queue board believes.
+  // The shift plan staffs the first N lanes that have a register. Lanes
+  // without a register are called only if their record still says open.
+  const installed = new Set(registers.registers.map((r) => r.lane));
+  const makeLane = (def, serves) => ({
+    id: def.id, serves, service: idx(def.service), counter: def.counter ?? null,
     queueDir: def.queueDir, queue: [], serving: null, serveLeft: 0,
   });
-  const open = Math.max(1, Math.min(params.openCheckouts, layout.checkouts.length));
-  const lanes = layout.checkouts.slice(0, open).map((c) => makeLane(c, false));
-  const phantomLanes = dirty ? (layout.phantomCheckouts ?? []).map((c) => makeLane(c, true)) : [];
-  const collectLane = makeLane(layout.collect, false);
-  const laneById = new Map([...lanes, ...phantomLanes, collectLane].map((l) => [l.id, l]));
-
-  const believedCode = new Map(products.categories.map((c) => [c.id, dirty && c.staleCode ? c.staleCode : c.code]));
-  const trueCode = new Map(products.categories.map((c) => [c.id, c.code]));
+  const lanes = [];
+  const deadLanes = [];
+  let staffed = 0;
+  for (const def of layout.checkouts) {
+    if (installed.has(def.id)) {
+      if (staffed < params.openCheckouts) { lanes.push(makeLane(def, true)); staffed++; }
+    } else if (def.status === 'open') {
+      deadLanes.push(makeLane(def, false));
+    }
+  }
+  if (!lanes.length) throw new Error('No staffed checkout lanes: check the POS register list and Open checkouts.');
+  const collectLane = makeLane(layout.collect, true);
+  const laneById = new Map([...lanes, ...deadLanes, collectLane].map((l) => [l.id, l]));
 
   const occ = new Uint16Array(W * H);
   const heat = new Float32Array(W * H);
@@ -271,7 +333,8 @@ export function createSimulation({ data, params, seed }) {
   const stats = {
     arrived: 0, completed: 0, served: 0, timeInStore: 0, walked: 0,
     waitTotal: 0, waitCount: 0, peakQueue: 0, exposures: 0, impulseBuys: 0,
-    lostItems: 0, searchTicks: 0, staleArrivals: 0, phantomDetours: 0, crowdedTicks: 0,
+    lostItems: 0, lostValue: 0, searchTicks: 0, wrongAisleVisits: 0, deadLaneDetours: 0,
+    walkouts: 0, walkoutValue: 0, revenue: 0, crowdedTicks: 0,
   };
   let t = 0;
   let nextId = 0;
@@ -298,16 +361,16 @@ export function createSimulation({ data, params, seed }) {
     const n = Math.min(randint(seg.listSize, rngProfile), pool.length);
     for (let k = 0; k < n; k++) {
       const c = pool.splice(Math.floor(rngProfile() * pool.length), 1)[0];
-      const believed = believedCode.get(c.id);
-      list.push({ kind: 'cat', categoryId: c.id, key: `cat:${believed}`,
-        trueKey: `cat:${trueCode.get(c.id)}`, stale: believed !== trueCode.get(c.id) });
+      // Shoppers head where the signage (product master) says the category is.
+      list.push({ kind: 'cat', categoryId: c.id, key: `fix:${c.aisle}`, trueKey: `cat:${c.id}` });
     }
     const a = {
       id: nextId++, seg, pos, state: 'walk', list, current: null, dwell: 0, after: null,
-      enteredAt: t, walked: 0, items: seg.id === 'collect' ? 1 : 0, exposed: false,
-      lane: null, queueJoin: -1, avoidPhantom: false, blocked: 0,
+      enteredAt: t, walked: 0, items: 0, basketValue: 0, exposed: false,
+      lane: null, queueJoin: -1, avoidDead: false, blocked: 0, patience: seg.patience,
       jx: rngProfile() - 0.5, jy: rngProfile() - 0.5,
     };
+    if (seg.id === 'collect') { a.items = 1; a.basketValue = seg.orderValue ?? 0; }
     occ[pos]++;
     stats.arrived++;
     agents.push(a);
@@ -326,15 +389,31 @@ export function createSimulation({ data, params, seed }) {
     a.state = 'walk';
   }
 
+  function leave(a) {
+    a.state = 'exit';
+    a.current = { kind: 'exit', key: 'exit' };
+  }
+
   function headToCheckout(a) {
     let lane = collectLane;
     if (a.seg.id !== 'collect') {
-      const options = a.avoidPhantom ? lanes : [...lanes, ...phantomLanes];
+      // The queue-call board offers every lane the location master says is open.
+      const options = a.avoidDead ? lanes : [...lanes, ...deadLanes];
       let bestScore = Infinity;
       for (const l of options) {
         const score = l.queue.length + (l.serving ? 1 : 0) + field(`svc:${l.id}`)[a.pos] / 40;
         if (score < bestScore) { bestScore = score; lane = l; }
       }
+    }
+    // Balking: if even the best queue is longer than this shopper tolerates,
+    // they abandon the basket and walk out.
+    const length = lane.queue.length + (lane.serving ? 1 : 0);
+    if (length >= a.patience) {
+      stats.walkouts++;
+      stats.walkoutValue += a.basketValue;
+      a.walkedOut = true;
+      leave(a);
+      return;
     }
     a.lane = lane;
     a.current = { kind: 'lane', key: `svc:${lane.id}` };
@@ -343,14 +422,16 @@ export function createSimulation({ data, params, seed }) {
 
   function joinLane(a) {
     const lane = a.lane;
-    // The wait clock starts at the first queue a shopper joins — including a
-    // phantom lane — because from the customer's side that time is queueing.
+    // The wait clock starts at the first queue a shopper joins, including a
+    // lane with no register: from the customer's side that time is queueing.
     if (a.queueJoin < 0) a.queueJoin = t;
-    if (lane.phantom) {
-      stats.phantomDetours++;
+    if (!lane.serves) {
+      stats.deadLaneDetours++;
       a.state = 'confused';
-      a.dwell = randint(PHANTOM_WAIT);
-      a.avoidPhantom = true;
+      a.dwell = randint(DEAD_LANE_WAIT);
+      a.avoidDead = true;
+      // Someone who has just queued at a dead lane is less willing to queue again.
+      a.patience = Math.max(1, Math.floor(a.patience / 2));
       return;
     }
     occ[a.pos]--;
@@ -406,6 +487,13 @@ export function createSimulation({ data, params, seed }) {
     }
   }
 
+  /** Is the target category physically on the fixture the shopper has reached? */
+  function foundHere(tg) {
+    if (tg.key === tg.trueKey) return true;
+    const code = tg.key.slice(4);
+    return fixturesFor.get(tg.categoryId)?.has(code) ?? false;
+  }
+
   function arrive(a) {
     const tg = a.current;
     if (tg.kind === 'exit') {
@@ -418,8 +506,8 @@ export function createSimulation({ data, params, seed }) {
     }
     a.state = 'dwell';
     if (tg.kind === 'promo') { a.dwell = randint([3, 6]); a.after = 'impulse'; return; }
-    if (tg.stale && !tg.searched) {
-      stats.staleArrivals++;
+    if (!foundHere(tg)) {
+      stats.wrongAisleVisits++;
       a.dwell = randint([8, 15]);
       stats.searchTicks += a.dwell;
       a.after = 'search';
@@ -431,14 +519,27 @@ export function createSimulation({ data, params, seed }) {
 
   function finishDwell(a) {
     const tg = a.current;
-    if (a.after === 'pick') { a.items++; nextTarget(a); return; }
-    if (a.after === 'impulse') { a.items++; stats.impulseBuys++; nextTarget(a); return; }
+    if (a.after === 'pick') {
+      a.items++;
+      a.basketValue += categoryById.get(tg.categoryId)?.avgItemValue ?? 0;
+      nextTarget(a);
+      return;
+    }
+    if (a.after === 'impulse') {
+      a.items++;
+      a.basketValue += products.promoItemValue ?? 0;
+      stats.impulseBuys++;
+      nextTarget(a);
+      return;
+    }
     if (a.after === 'search') {
+      // Some shoppers ask staff or browse until they find it; others give up.
       if (rng() < SEARCH_RECOVERY_PROBABILITY) {
-        a.current = { ...tg, key: tg.trueKey, stale: false, searched: true };
+        a.current = { ...tg, key: tg.trueKey };
         a.state = 'walk';
       } else {
         stats.lostItems++;
+        stats.lostValue += categoryById.get(tg.categoryId)?.avgItemValue ?? 0;
         nextTarget(a);
       }
     }
@@ -479,10 +580,10 @@ export function createSimulation({ data, params, seed }) {
       const a = lane.serving;
       lane.serving = null;
       stats.served++;
+      stats.revenue += a.basketValue;
       a.pos = lane.service;
       occ[a.pos]++;
-      a.state = 'exit';
-      a.current = { kind: 'exit', key: 'exit' };
+      leave(a);
     }
   }
 
@@ -526,6 +627,7 @@ export function createSimulation({ data, params, seed }) {
         waitN++;
       }
     }
+    const hours = (t * TICK_SECONDS) / 3600 || 1;
     const per = (v, n, d = 1) => (n ? +((v * TICK_SECONDS) / n).toFixed(d) : 0);
     return {
       simMinutes: +(t * TICK_SECONDS / 60).toFixed(1),
@@ -535,12 +637,16 @@ export function createSimulation({ data, params, seed }) {
       avgTimeInStoreMin: stats.arrived ? +((timeSum * TICK_SECONDS) / stats.arrived / 60).toFixed(2) : 0,
       avgQueueWaitSec: per(waitSum, waitN),
       peakQueue: stats.peakQueue,
+      walkouts: stats.walkouts,
       promoExposurePct: promoCell < 0 ? null : stats.arrived ? +((stats.exposures / stats.arrived) * 100).toFixed(1) : 0,
       impulseBuys: stats.impulseBuys,
       avgWalkM: stats.completed ? +(stats.walked / stats.completed).toFixed(1) : 0,
       lostItems: stats.lostItems,
+      wrongAisleVisits: stats.wrongAisleVisits,
       searchMinutes: +((stats.searchTicks * TICK_SECONDS) / 60).toFixed(1),
-      phantomDetours: stats.phantomDetours,
+      deadLaneDetours: stats.deadLaneDetours,
+      revenuePerHour: Math.round(stats.revenue / hours),
+      revenueAtRiskPerHour: Math.round((stats.lostValue + stats.walkoutValue) / hours),
       crowdingCellMin: +((stats.crowdedTicks * TICK_SECONDS) / 60).toFixed(1),
     };
   }
@@ -549,6 +655,6 @@ export function createSimulation({ data, params, seed }) {
     step, runToEnd, metrics,
     get tick() { return t; },
     get finished() { return t >= durationTicks; },
-    durationTicks, grid, layout, promoCell, agents, lanes, phantomLanes, collectLane, heat, occ,
+    durationTicks, grid, layout, planogram, promoCell, agents, lanes, deadLanes, collectLane, heat, occ,
   };
 }

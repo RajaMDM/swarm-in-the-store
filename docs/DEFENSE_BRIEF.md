@@ -16,8 +16,23 @@ Grid plus breadth-first distance maps is simple, fast and deterministic. Every s
 ## Why are the masters JSON files rather than hard-coded?
 That is the point of the demo. Store geometry, categories and segments are governed data with owners and versions. Keeping them as data makes the governance checks meaningful, and lets anyone fork the repo and model their own store without touching code.
 
-## How do you know clean vs dirty is a fair comparison?
-Common random numbers. Arrivals and shopper profiles come from their own seeded streams, so both scenarios face exactly the same customers. A test asserts equal arrival counts, and another asserts dirty data is worse on time and wait across several settings.
+## "Isn't the dirty-data mode rigged?"
+Not anymore, and a test proves it. The engine has no clean/dirty concept; a test scans its code for any defect logic. Defects are patches to the system-of-record JSON. The engine reads the masters and the reality files, and the cost appears only because shoppers act on beliefs that disagree with the floor. Anyone can add a new defect by editing `defects.json`, without touching code.
+
+## "Why does a human shopper obey a JSON file?"
+They don't. They obey signage, the store app and the queue-call board, which are generated from the product and location masters. That is how master data steers feet in real stores, and the UI says so.
+
+## "Your governance gate was green while running on bad data."
+Fair, and it was fixed by splitting it. Tier 1 is structural integrity (schema-level linting) and blocks the run. Tier 2 is operational sync (system of record vs physical reality) and warns. With a defect on, Tier 1 stays green and Tier 2 turns amber, which is the real-world lesson: structurally valid data can be operationally wrong.
+
+## "Why not annualise revenue at risk?"
+Because the model is uncalibrated and the prices are placeholders. Multiplying an illustrative hourly figure by 3,000+ trading hours produces a precise-looking number with no basis. $/hr labelled illustrative is honest; "$876k per store per year" would not be.
+
+## "Do the defects compound?"
+Sometimes they partly mask each other. On queue wait, both defects together cost less than the sum, because the stale aisle moves shoppers away from L7. The matrix reports this automatically instead of assuming a story.
+
+## How do you know the scenario comparisons are fair?
+Common random numbers. Arrivals and shopper profiles come from their own seeded streams, so every defect combination faces exactly the same customers (a test asserts identical arrival counts). The matrix then repeats each scenario over 10 seeds and shows the range, so a difference is not one lucky draw. Tests assert each defect's direction of effect on the mean of 10 seeds.
 
 ## Why should anyone trust the numbers?
 They should trust the *direction*, not the decimals. The model is illustrative and uncalibrated, and the README says so. What is defensible: runs are reproducible, assumptions are visible in the JSON, behaviour is covered by tests, and a known bug (gridlock plus survivorship bias) was found and documented rather than hidden.

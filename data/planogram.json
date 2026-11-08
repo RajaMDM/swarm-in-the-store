@@ -1,0 +1,31 @@
+{
+  "_about": "Planogram (physical reality): which category is actually stocked on each fixture group after the last refit. Owned by store operations; audited on the shop floor.",
+  "version": "2026.10-refit",
+  "owner": "Store Operations (fictitious)",
+  "fixtures": [
+    {
+      "code": "1",
+      "category": "fresh"
+    },
+    {
+      "code": "2",
+      "category": "bakery"
+    },
+    {
+      "code": "3",
+      "category": "snacks"
+    },
+    {
+      "code": "4",
+      "category": "drinks"
+    },
+    {
+      "code": "5",
+      "category": "household"
+    },
+    {
+      "code": "6",
+      "category": "personal"
+    }
+  ]
+}

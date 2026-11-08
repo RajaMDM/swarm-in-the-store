@@ -1,0 +1,31 @@
+{
+  "_about": "Master data defects, expressed as patches to the system-of-record files only. The engine never sees a 'dirty' flag: it reads whatever the masters say, and reality (planogram, POS registers) stays unchanged.",
+  "defects": [
+    {
+      "id": "stale-aisle",
+      "name": "Stale category location",
+      "domain": "Product master",
+      "summary": "Household moved from aisle 3 to aisle 5 in the refit; the product master still says aisle 3.",
+      "howItReachesShoppers": "Aisle directory signage and the store app are generated from the product master, so shoppers are sent to aisle 3.",
+      "patches": [
+        {
+          "path": "products.categories[id=household].aisle",
+          "value": "3"
+        }
+      ]
+    },
+    {
+      "id": "zombie-lane",
+      "name": "Zombie checkout lane L7",
+      "domain": "Location master",
+      "summary": "L7's register was removed in the refit; its location-master record still says open.",
+      "howItReachesShoppers": "The queue-call board reads lane status from the location master, so it keeps calling customers to L7.",
+      "patches": [
+        {
+          "path": "location.layouts[*].checkouts[id=L7].status",
+          "value": "open"
+        }
+      ]
+    }
+  ]
+}

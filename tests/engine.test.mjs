@@ -1,5 +1,5 @@
 /**
- * Engine tests. Run with: node --test tests/
+ * Engine and data tests. Run with: npm test
  * No dependencies: uses Node's built-in test runner.
  */
 import { test } from 'node:test';
@@ -8,16 +8,34 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createSimulation, validateMasterData, parseGrid, distanceField, mulberry32 } from '../src/engine.js';
+import { applyDefects, applyPatch } from '../src/defects.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const load = (f) => JSON.parse(readFileSync(join(root, 'data', `${f}.json`), 'utf8'));
 const location = load('location-master');
 const products = load('product-master');
 const segments = load('customer-segments');
+const planogram = load('planogram');
+const registers = load('pos-registers');
+const catalogue = load('defects');
 
-const BASE = { openCheckouts: 3, arrivalsPerMin: 3, promoSlot: 'front', dataQuality: 'clean', durationMin: 60 };
-const run = (layout, params = {}, seed = 1989) =>
-  createSimulation({ data: { layout, products, segments }, params: { ...BASE, ...params }, seed }).runToEnd();
+const BASE = { openCheckouts: 3, arrivalsPerMin: 3, promoSlot: 'front', durationMin: 60 };
+
+/** Data for one layout with the given defects patched in. */
+function dataFor(layoutId = 'grid', defectIds = []) {
+  const m = applyDefects({ location, products }, catalogue, defectIds);
+  const layout = m.location.layouts.find((l) => l.id === layoutId);
+  return { layout, products: m.products, segments, planogram, registers };
+}
+const run = (data, params = {}, seed = 1989) =>
+  createSimulation({ data, params: { ...BASE, ...params }, seed }).runToEnd();
+
+/** Mean of a metric across seeds. */
+function meanOver(data, key, params = {}, seeds = 10) {
+  let s = 0;
+  for (let i = 0; i < seeds; i++) s += run(data, params, 1000 + i)[key];
+  return s / seeds;
+}
 
 test('PRNG is deterministic for a seed', () => {
   const a = mulberry32(7);
@@ -25,34 +43,66 @@ test('PRNG is deterministic for a seed', () => {
   for (let i = 0; i < 100; i++) assert.equal(a(), b());
 });
 
-test('both shipped layouts pass every master data check', () => {
-  for (const layout of location.layouts) {
-    const failed = validateMasterData({ layout, products, segments }).filter((r) => !r.ok);
-    assert.deepEqual(failed, [], `${layout.id}: ${JSON.stringify(failed)}`);
+test('the engine has no clean/dirty switch: defects exist only as data', () => {
+  const code = readFileSync(join(root, 'src', 'engine.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '') // strip block comments
+    .replace(/\/\/.*$/gm, ''); // strip line comments
+  assert.doesNotMatch(code, /dirty|clean|dataQuality|defect|stale|zombie|phantom/i);
+});
+
+test('defect patches touch only system-of-record files', () => {
+  for (const d of catalogue.defects) {
+    for (const p of d.patches) assert.match(p.path, /^(location|products)\./, `${d.id}: ${p.path}`);
   }
 });
 
-test('validation catches a ragged grid', () => {
-  const layout = { ...location.layouts[0], grid: [...location.layouts[0].grid] };
-  layout.grid[3] = layout.grid[3].slice(0, -1);
-  const results = validateMasterData({ layout, products, segments });
-  assert.equal(results[0].ok, false);
-  assert.match(results[0].detail, /row 3/);
+test('applyDefects does not mutate the originals', () => {
+  const before = JSON.stringify({ location, products });
+  applyDefects({ location, products }, catalogue, ['stale-aisle', 'zombie-lane']);
+  assert.equal(JSON.stringify({ location, products }), before);
 });
 
-test('validation catches a category with no shelf and an orphan shelf code', () => {
-  const extra = { ...products, categories: [...products.categories, { id: 'toys', name: 'Toys', code: '9', color: '#000' }] };
-  const r1 = validateMasterData({ layout: location.layouts[0], products: extra, segments });
-  assert.equal(r1.find((r) => r.check.startsWith('Every product category')).ok, false);
-
-  const fewer = { ...products, categories: products.categories.filter((c) => c.code !== '6') };
-  const r2 = validateMasterData({ layout: location.layouts[0], products: fewer, segments });
-  assert.equal(r2.find((r) => r.check.startsWith('Every shelf maps')).ok, false);
+test('applyPatch supports key filters and wildcards, and reports misses', () => {
+  const doc = { a: [{ id: 'x', v: 1 }, { id: 'y', v: 2 }], b: [{ c: [{ id: 'x', v: 0 }] }, { c: [{ id: 'x', v: 0 }] }] };
+  assert.equal(applyPatch(doc, 'a[id=y].v', 9), 1);
+  assert.equal(doc.a[1].v, 9);
+  assert.equal(applyPatch(doc, 'b[*].c[id=x].v', 5), 2);
+  assert.equal(applyPatch(doc, 'a[id=zzz].v', 1), 0);
+  assert.throws(() => applyDefects({ location, products }, catalogue, ['no-such-defect']), /Unknown defect/);
 });
 
-test('validation catches segment shares that do not sum to 100%', () => {
+test('clean data passes every check in both tiers, on both layouts', () => {
+  for (const layout of location.layouts) {
+    const { structural, operational } = validateMasterData(dataFor(layout.id));
+    assert.deepEqual([...structural, ...operational].filter((r) => !r.ok), [], layout.id);
+  }
+});
+
+test('each defect passes Tier 1 but is caught by exactly one Tier 2 check', () => {
+  const expected = { 'stale-aisle': 'Aisle signage matches the planogram', 'zombie-lane': 'No lane is open without a POS register' };
+  for (const [id, check] of Object.entries(expected)) {
+    const { structural, operational } = validateMasterData(dataFor('grid', [id]));
+    assert.equal(structural.filter((r) => !r.ok).length, 0, `${id} should pass structural checks`);
+    const failed = operational.filter((r) => !r.ok).map((r) => r.check);
+    assert.deepEqual(failed, [check], id);
+  }
+});
+
+test('Tier 1 catches a ragged grid and an unplanned fixture', () => {
+  const d = dataFor();
+  const ragged = { ...d, layout: { ...d.layout, grid: d.layout.grid.map((r, i) => (i === 3 ? r.slice(0, -1) : r)) } };
+  const r1 = validateMasterData(ragged).structural;
+  assert.equal(r1[0].ok, false);
+  assert.match(r1[0].detail, /row 3/);
+
+  const plan = { ...planogram, fixtures: planogram.fixtures.filter((f) => f.code !== '6') };
+  const r2 = validateMasterData({ ...d, planogram: plan }).structural;
+  assert.equal(r2.find((r) => r.check.startsWith('Every fixture group')).ok, false);
+});
+
+test('Tier 1 catches segment shares that do not sum to 100%', () => {
   const bad = { segments: segments.segments.map((s, i) => (i === 0 ? { ...s, share: s.share + 0.1 } : s)) };
-  const r = validateMasterData({ layout: location.layouts[0], products, segments: bad });
+  const r = validateMasterData({ ...dataFor(), segments: bad }).structural;
   assert.equal(r.find((x) => x.check.startsWith('Customer segment')).ok, false);
 });
 
@@ -63,68 +113,63 @@ test('distance field is zero at the source and grows by one per step', () => {
 });
 
 test('same seed and parameters give identical results', () => {
+  for (const layout of location.layouts) assert.deepEqual(run(dataFor(layout.id)), run(dataFor(layout.id)));
+});
+
+test('every defect combination faces the same arriving shoppers', () => {
+  const combos = [[], ['stale-aisle'], ['zombie-lane'], ['stale-aisle', 'zombie-lane']];
+  const arrivals = combos.map((c) => run(dataFor('grid', c)).arrived);
+  assert.equal(new Set(arrivals).size, 1);
+});
+
+test('clean data produces no lost items, dead-lane detours or revenue from defects', () => {
   for (const layout of location.layouts) {
-    assert.deepEqual(run(layout), run(layout));
-  }
-});
-
-test('a different seed gives a different run', () => {
-  const layout = location.layouts[0];
-  assert.notDeepEqual(run(layout, {}, 1), run(layout, {}, 2));
-});
-
-test('clean and dirty runs face the same arriving shoppers', () => {
-  const layout = location.layouts[0];
-  assert.equal(run(layout, { dataQuality: 'clean' }).arrived, run(layout, { dataQuality: 'dirty' }).arrived);
-});
-
-test('clean master data produces no lost items or phantom detours', () => {
-  for (const layout of location.layouts) {
-    const m = run(layout);
+    const m = run(dataFor(layout.id));
     assert.equal(m.lostItems, 0);
-    assert.equal(m.phantomDetours, 0);
+    assert.equal(m.deadLaneDetours, 0);
+    assert.equal(m.wrongAisleVisits, 0);
   }
 });
 
-test('dirty master data costs shoppers time and queue wait, and loses items', () => {
+test('stale aisle loses items and revenue (mean of 10 seeds)', () => {
   for (const layout of location.layouts) {
-    for (const [openCheckouts, arrivalsPerMin] of [[2, 4], [3, 3], [6, 6]]) {
-      const clean = run(layout, { openCheckouts, arrivalsPerMin, dataQuality: 'clean' });
-      const dirty = run(layout, { openCheckouts, arrivalsPerMin, dataQuality: 'dirty' });
-      const label = `${layout.id} lanes=${openCheckouts} arrivals=${arrivalsPerMin}`;
-      assert.ok(dirty.lostItems > 0, `${label}: lost items`);
-      assert.ok(dirty.phantomDetours > 0, `${label}: phantom detours`);
-      assert.ok(dirty.avgTimeInStoreMin > clean.avgTimeInStoreMin, `${label}: time in store`);
-      assert.ok(dirty.avgQueueWaitSec > clean.avgQueueWaitSec, `${label}: queue wait`);
-    }
+    const clean = dataFor(layout.id);
+    const stale = dataFor(layout.id, ['stale-aisle']);
+    assert.ok(meanOver(stale, 'lostItems') > 10, layout.id);
+    assert.ok(meanOver(stale, 'revenuePerHour') < meanOver(clean, 'revenuePerHour'), layout.id);
+  }
+});
+
+test('zombie lane costs queue time, and walkouts under load (mean of 10 seeds)', () => {
+  for (const layout of location.layouts) {
+    const clean = dataFor(layout.id);
+    const zombie = dataFor(layout.id, ['zombie-lane']);
+    assert.ok(meanOver(zombie, 'avgQueueWaitSec') > meanOver(clean, 'avgQueueWaitSec') * 1.5, `${layout.id} wait`);
+    const load = { openCheckouts: 2, arrivalsPerMin: 4 };
+    assert.ok(meanOver(zombie, 'walkouts', load) > meanOver(clean, 'walkouts', load), `${layout.id} walkouts`);
   }
 });
 
 test('opening more checkouts reduces queue wait under load', () => {
-  const layout = location.layouts[0];
-  const two = run(layout, { openCheckouts: 2, arrivalsPerMin: 4 });
-  const five = run(layout, { openCheckouts: 5, arrivalsPerMin: 4 });
-  assert.ok(five.avgQueueWaitSec < two.avgQueueWaitSec);
+  const d = dataFor();
+  assert.ok(run(d, { openCheckouts: 5, arrivalsPerMin: 4 }).avgQueueWaitSec < run(d, { openCheckouts: 2, arrivalsPerMin: 4 }).avgQueueWaitSec);
 });
 
-test('no gridlock: almost everyone who arrives finishes', () => {
+test('no gridlock: almost everyone who arrives has left by the end', () => {
   for (const layout of location.layouts) {
-    for (const dataQuality of ['clean', 'dirty']) {
-      const m = run(layout, { openCheckouts: 2, arrivalsPerMin: 4, dataQuality });
-      assert.ok(m.inStore / m.arrived < 0.15, `${layout.id} ${dataQuality}: ${m.inStore} of ${m.arrived} still in store`);
+    for (const ids of [[], ['stale-aisle', 'zombie-lane']]) {
+      const m = run(dataFor(layout.id, ids), { openCheckouts: 2, arrivalsPerMin: 4 });
+      assert.ok(m.inStore / m.arrived < 0.15, `${layout.id} ${ids}: ${m.inStore} of ${m.arrived} still in store`);
     }
   }
 });
 
 test('promo reach is reported only when a stand is placed', () => {
-  const layout = location.layouts[0];
-  assert.equal(run(layout, { promoSlot: 'none' }).promoExposurePct, null);
-  assert.ok(run(layout, { promoSlot: 'front' }).promoExposurePct > 0);
+  const d = dataFor();
+  assert.equal(run(d, { promoSlot: 'none' }).promoExposurePct, null);
+  assert.ok(run(d, { promoSlot: 'front' }).promoExposurePct > 0);
 });
 
 test('unknown promo slot is rejected with a clear error', () => {
-  assert.throws(
-    () => createSimulation({ data: { layout: location.layouts[0], products, segments }, params: { ...BASE, promoSlot: 'roof' }, seed: 1 }),
-    /Unknown promo slot 'roof'/,
-  );
+  assert.throws(() => createSimulation({ data: dataFor(), params: { ...BASE, promoSlot: 'roof' }, seed: 1 }), /Unknown promo slot 'roof'/);
 });

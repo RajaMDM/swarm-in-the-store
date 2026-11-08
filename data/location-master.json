@@ -1,6 +1,6 @@
 {
-  "_about": "Location master: the governed record of store geometry. Symbols: # wall, . floor, E entrance, C checkout counter, K click-and-collect counter, digits = shelf holding that product category code.",
-  "version": "1.0.0",
+  "_about": "Location master: the system of record for store geometry and checkout lanes. Symbols: # wall, . floor, E entrance, C checkout counter, K click-and-collect counter, digits = fixture group code. Lane status drives the electronic queue-call board ('Next customer, Lane 3'). For lanes with an installed register, the shift plan (Open checkouts lever) sets open/closed at run time.",
+  "version": "1.1.0",
   "owner": "Store Operations (fictitious)",
   "store": "Northwind Market, Store 014 (fictitious)",
   "layouts": [
@@ -58,7 +58,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L2",
@@ -73,7 +74,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L3",
@@ -88,7 +90,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L4",
@@ -103,7 +106,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L5",
@@ -118,7 +122,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L6",
@@ -133,10 +138,9 @@
           "queueDir": [
             0,
             -1
-          ]
-        }
-      ],
-      "phantomCheckouts": [
+          ],
+          "status": "open"
+        },
         {
           "id": "L7",
           "counter": [
@@ -151,7 +155,8 @@
             0,
             -1
           ],
-          "note": "Decommissioned in the refit; still listed as an open lane in the location master."
+          "status": "decommissioned",
+          "note": "Register removed in the last refit; the counter shell remains."
         }
       ],
       "collect": {
@@ -243,7 +248,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L2",
@@ -258,7 +264,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L3",
@@ -273,7 +280,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L4",
@@ -288,7 +296,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L5",
@@ -303,7 +312,8 @@
           "queueDir": [
             0,
             -1
-          ]
+          ],
+          "status": "open"
         },
         {
           "id": "L6",
@@ -318,10 +328,9 @@
           "queueDir": [
             0,
             -1
-          ]
-        }
-      ],
-      "phantomCheckouts": [
+          ],
+          "status": "open"
+        },
         {
           "id": "L7",
           "counter": [
@@ -336,7 +345,8 @@
             0,
             -1
           ],
-          "note": "Decommissioned in the refit; still listed as an open lane in the location master."
+          "status": "decommissioned",
+          "note": "Register removed in the last refit; the counter shell remains."
         }
       ],
       "collect": {
