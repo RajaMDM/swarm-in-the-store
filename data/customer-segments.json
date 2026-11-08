@@ -1,0 +1,71 @@
+{
+  "_about": "Customer segments: shopper missions and their behaviour parameters. Shares must sum to 1.",
+  "version": "1.0.0",
+  "owner": "Customer Insight (fictitious)",
+  "segments": [
+    {
+      "id": "quick",
+      "name": "Quick top-up",
+      "share": 0.4,
+      "speed": 0.95,
+      "listSize": [
+        1,
+        2
+      ],
+      "dwell": [
+        3,
+        6
+      ],
+      "impulse": 0.15,
+      "color": "#10847A"
+    },
+    {
+      "id": "browse",
+      "name": "Browse",
+      "share": 0.2,
+      "speed": 0.75,
+      "listSize": [
+        4,
+        6
+      ],
+      "dwell": [
+        6,
+        12
+      ],
+      "impulse": 0.5,
+      "color": "#524AA8"
+    },
+    {
+      "id": "family",
+      "name": "Family weekend",
+      "share": 0.25,
+      "speed": 0.6,
+      "listSize": [
+        3,
+        5
+      ],
+      "dwell": [
+        8,
+        15
+      ],
+      "impulse": 0.6,
+      "color": "#E4962A"
+    },
+    {
+      "id": "collect",
+      "name": "Click & collect",
+      "share": 0.15,
+      "speed": 0.9,
+      "listSize": [
+        0,
+        0
+      ],
+      "dwell": [
+        0,
+        0
+      ],
+      "impulse": 0.1,
+      "color": "#DA5448"
+    }
+  ]
+}

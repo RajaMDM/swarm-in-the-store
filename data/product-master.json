@@ -1,0 +1,45 @@
+{
+  "_about": "Product master: categories and the shelf code they live on. staleCode marks a record not updated after a refit; it is only used when the demo runs with dirty master data.",
+  "version": "1.0.0",
+  "owner": "Category Management (fictitious)",
+  "categories": [
+    {
+      "id": "fresh",
+      "name": "Fresh produce",
+      "code": "1",
+      "color": "#5F9A5C"
+    },
+    {
+      "id": "bakery",
+      "name": "Bakery",
+      "code": "2",
+      "color": "#C9893A"
+    },
+    {
+      "id": "snacks",
+      "name": "Snacks",
+      "code": "3",
+      "color": "#E4962A"
+    },
+    {
+      "id": "drinks",
+      "name": "Drinks",
+      "code": "4",
+      "color": "#2F7FB8"
+    },
+    {
+      "id": "household",
+      "name": "Household",
+      "code": "5",
+      "color": "#524AA8",
+      "staleCode": "3",
+      "staleNote": "Moved from the snacks aisle in the last refit; the product master was never updated."
+    },
+    {
+      "id": "personal",
+      "name": "Personal care",
+      "code": "6",
+      "color": "#B05A8E"
+    }
+  ]
+}

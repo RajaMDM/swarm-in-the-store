@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swarm in the Store</title>
+  <meta name="description" content="A browser swarm simulation of shoppers in a retail store. Change the layout, promo, checkouts and master data quality, and watch congestion emerge.">
+  <meta property="og:title" content="Swarm in the Store — live demo">
+  <meta property="og:description" content="Emergence is only as true as the master data beneath it. Run a seeded swarm of shoppers and compare clean vs dirty master data.">
+  <meta property="og:image" content="https://rajamdm.github.io/swarm-in-the-store/assets/cover.png">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="hero">
+    <p class="eyebrow">Swarm intelligence · Retail · Master data</p>
+    <h1>The Swarm in the <em>Store</em></h1>
+    <p class="lede">Every shopper follows simple local rules and sees only the cells around them. Queues, hotspots and wasted walking emerge from the crowd. Change the store, then change the <strong>master data</strong>, and watch what happens.</p>
+    <p class="hero-links">
+      <a href="https://www.linkedin.com/pulse/swarm-store-raja-shahnawaz-soni-bozof/" target="_blank" rel="noopener">Read the article</a>
+      <a href="https://github.com/RajaMDM/swarm-in-the-store" target="_blank" rel="noopener">Source on GitHub</a>
+    </p>
+  </header>
+
+  <p id="load-error" class="load-error" role="alert" hidden></p>
+
+  <main class="workspace">
+    <section class="stage card" aria-label="Store simulation">
+      <div class="stage-head">
+        <div>
+          <span class="mono label">Simulated store time</span>
+          <span id="clock" class="mono clock">00:00 / 60:00</span>
+        </div>
+        <div class="buttons">
+          <button id="play" class="primary">Run</button>
+          <button id="reset">Reset</button>
+          <button id="save" title="Add the current numbers to the comparison table">Save run</button>
+        </div>
+      </div>
+      <div class="progress-track"><div id="progress" class="progress"></div></div>
+      <div class="canvas-wrap"><canvas id="store" role="img" aria-label="Top-down store plan with shoppers moving through aisles"></canvas></div>
+      <div class="stage-foot">
+        <label class="inline"><input type="checkbox" id="heat"> Show footfall heatmap</label>
+        <label class="inline">Speed <input type="range" id="speed" min="1" max="60" step="1"> <output id="speed-out" class="mono">8×</output></label>
+      </div>
+      <div class="legends">
+        <div><span class="mono label">Shopper missions</span><ul id="legend-missions" class="legend"></ul></div>
+        <div><span class="mono label">Shelf categories (product master)</span><ul id="legend-categories" class="legend"></ul></div>
+      </div>
+    </section>
+
+    <aside class="panel card" aria-label="Levers">
+      <h2>Levers</h2>
+      <label class="field">Store layout
+        <select id="layout"></select>
+        <small id="layout-desc"></small>
+      </label>
+      <label class="field">Promo stand
+        <select id="promo"></select>
+      </label>
+      <label class="field">Open checkouts <output id="checkouts-out" class="mono">3</output>
+        <input type="range" id="checkouts" min="1" max="6" step="1">
+      </label>
+      <label class="field">Arrivals per minute <output id="arrivals-out" class="mono">3</output>
+        <input type="range" id="arrivals" min="0.5" max="8" step="0.5">
+      </label>
+      <fieldset class="field dq">
+        <legend>Master data quality</legend>
+        <label class="inline"><input type="radio" name="dq" value="clean"> Clean</label>
+        <label class="inline"><input type="radio" name="dq" value="dirty"> Dirty</label>
+      </fieldset>
+      <div id="dq-explainer" class="dq-explainer" hidden>
+        <strong>Two real-world defects are switched on:</strong>
+        <ul>
+          <li>The product master still lists <em>Household</em> in the snacks aisle after a refit, so shoppers search the wrong aisle.</li>
+          <li>The location master lists lane <em>L7</em> as open. It was decommissioned, so shoppers queue at a closed counter (ringed in red).</li>
+        </ul>
+      </div>
+      <div class="row">
+        <label class="field">Run length
+          <select id="duration">
+            <option value="30">30 min</option><option value="60">60 min</option><option value="90">90 min</option><option value="120">120 min</option>
+          </select>
+        </label>
+        <label class="field">Seed
+          <input type="number" id="seed" min="0" step="1">
+        </label>
+      </div>
+      <button id="compare" class="primary wide">Compare clean vs dirty data</button>
+      <small class="hint">Runs both scenarios instantly with the same shoppers and seed, and adds them to the table below.</small>
+      <button id="copy-link" class="link">Copy link to this setup</button>
+    </aside>
+  </main>
+
+  <section class="metrics" aria-label="Live metrics">
+    <div class="metric"><span class="mono label">Shoppers</span><strong id="m-shoppers">0</strong><small id="m-shoppers-sub"></small></div>
+    <div class="metric"><span class="mono label">Time in store</span><strong id="m-time">0</strong><small>avg minutes</small></div>
+    <div class="metric"><span class="mono label">Queue wait</span><strong id="m-wait">0</strong><small>avg seconds</small></div>
+    <div class="metric"><span class="mono label">Peak queue</span><strong id="m-peak">0</strong><small>shoppers in one line</small></div>
+    <div class="metric"><span class="mono label">Walk</span><strong id="m-walk">0</strong><small>avg metres</small></div>
+    <div class="metric"><span class="mono label">Promo reach</span><strong id="m-promo">—</strong><small>passed the stand</small></div>
+    <div class="metric" id="m-lost-card"><span class="mono label">Lost items</span><strong id="m-lost">0</strong><small>gave up, wrong aisle</small></div>
+    <div class="metric" id="m-phantom-card"><span class="mono label">Phantom detours</span><strong id="m-phantom">0</strong><small>queued at a closed lane</small></div>
+  </section>
+
+  <section class="lower">
+    <div class="card">
+      <h2>Master data checks</h2>
+      <p id="checks-summary"></p>
+      <p class="muted">The simulation will not run until the location, product and customer-segment masters pass these checks. Governance first, emergence second.</p>
+      <ul id="checks-list" class="checks"></ul>
+    </div>
+    <div class="card">
+      <h2>How to read it</h2>
+      <ol class="steps">
+        <li><strong>Press Run.</strong> Shoppers enter at the bottom, visit the shelves on their list, queue and leave. Nobody tells them where the crowd is: they only see neighbouring cells.</li>
+        <li><strong>Turn on the heatmap.</strong> The hotspots you see were never coded. They emerge from thousands of local decisions.</li>
+        <li><strong>Pull a lever.</strong> Move the promo stand, close a checkout or raise arrivals. Same seed, same shoppers, different store.</li>
+        <li><strong>Break the master data.</strong> Switch to dirty data, or press <em>Compare clean vs dirty</em>. Watch lost items, phantom detours and walking distance move.</li>
+      </ol>
+      <p class="muted">Illustrative model, not calibrated to any real store. All names and data are fictitious.</p>
+    </div>
+  </section>
+
+  <section id="compare-section" class="card compare">
+    <div class="compare-head">
+      <h2>Run comparison</h2>
+      <button id="clear-runs" class="link" hidden>Clear all</button>
+    </div>
+    <p id="runs-empty" class="muted">No saved runs yet. Press <em>Save run</em> during a run, or <em>Compare clean vs dirty data</em>.</p>
+    <div class="table-wrap"><table id="runs" hidden></table></div>
+    <p class="muted"><span class="best-chip">green</span> best and <span class="worst-chip">red</span> worst in each column.</p>
+  </section>
+
+  <footer class="footer">
+    <p>Built by <a href="https://www.linkedin.com/in/raja-shahnawaz/" target="_blank" rel="noopener">Raja Shahnawaz Soni</a> · <span class="mono">Built, not described</span> · MIT licensed</p>
+  </footer>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
